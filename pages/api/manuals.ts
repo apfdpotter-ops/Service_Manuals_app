@@ -41,12 +41,12 @@ function getDebugParam(req: NextApiRequest): string | undefined {
 
 function toGFiles(files: drive_v3.Schema$File[] | undefined): GFile[] {
   if (!files || files.length === 0) return [];
-  return files.map((f: drive_v3.Schema$File): GFile => ({
-    id: f.id ?? undefined,
-    name: f.name ?? undefined,
-    mimeType: f.mimeType ?? undefined,
-    webViewLink: f.webViewLink ?? undefined,
-  }));
+ return files.map((f: drive_v3.Schema$File): GFile => ({
+  id: f.id ?? undefined,
+  name: f.name ?? undefined,
+  mimeType: f.mimeType ?? undefined,
+  webViewLink: f.webViewLink ?? undefined,
+}));
 }
 
 /** ---------- Handler ---------- **/
@@ -112,7 +112,6 @@ export default async function handler(
       );
       for (const f of folders) {
         if (f.id && f.name) {
-          // eslint-disable-next-line no-await-in-loop
           await walk(f.id, [...path, f.name]);
         }
       }
