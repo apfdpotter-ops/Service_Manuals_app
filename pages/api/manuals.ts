@@ -5,9 +5,9 @@ type Manual = {
   id: string;
   title: string;
   url: string;
-  path: string[];            // e.g. ["Small Engines","Kawasaki Small Engine"]
-  brand?: string;            // optional: derived from path
-  category?: string;         // optional: derived from path
+  path: string[];
+  brand?: string;
+  category?: string;
   tags?: string[];
 };
 
@@ -27,7 +27,6 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
     );
     const drive = google.drive({ version: "v3", auth });
 
-    // helper: list children of a folder (both files and folders)
     const listChildren = async (parentId: string) => {
       const out: any[] = [];
       let pageToken: string | undefined;
@@ -44,34 +43,30 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
       return out;
     };
 
-    // DFS recursion: walk folders and collect PDFs
     const manuals: Manual[] = [];
     const walk = async (id: string, path: string[]) => {
       const children = await listChildren(id);
 
-      // folders first
       const folders = children.filter(f => f.mimeType === "application/vnd.google-apps.folder");
       for (const f of folders) {
         await walk(f.id!, [...path, f.name!]);
       }
 
-      // PDFs in this folder
       const pdfs = children.filter(f => f.mimeType === "application/pdf");
       for (const f of pdfs) {
         manuals.push({
           id: f.id!,
           title: f.name || "Untitled",
           url: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
-          path,                                   // the folder path from root to here
-          // simple optional derivations (tweak how you like):
-          category: path[0],                      // e.g. "Small Engines" or "Powersports"
-          brand: path[1],                         // e.g. "Kawasaki Small Engine" or "John Deere Mowers"
+          path,
+          category: path[0],
+          brand: path[1],
           tags: [],
         });
       }
     };
 
-    await walk(folderId, []); // start at your root folder
+    await walk(folderId, []);
 
     res.setHeader("Cache-Control", "no-store");
     res.status(200).json(manuals);
