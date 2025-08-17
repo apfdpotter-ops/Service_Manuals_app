@@ -1,21 +1,46 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { google } from "googleapis";
 
 export default async function handler(
   _req: NextApiRequest,
   res: NextApiResponse
 ) {
   try {
-    const url =
-      "https://raw.githubusercontent.com/apfdpotter-ops/Service_Manuals_app/main/data/manuals.json";
+    const keyRaw = process.env.GOOGLE_SERVICE_KEY;
+    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID || "18cA7HjlJjvU5NN1-eEfJnvpMoxNyQboi";
+    if (!keyRaw) throw new Error("Missing GOOGLE_SERVICE_KEY env var");
 
-    const response = await fetch(url, { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(`Upstream fetch failed: ${response.status} ${response.statusText}`);
-    }
+    const key = JSON.parse(keyRaw);
 
-    const manuals = await response.json();
+    const auth = new google.auth.JWT(
+      key.client_email,
+      undefined,
+      key.private_key,
+      ["https://www.googleapis.com/auth/drive.readonly"]
+    );
+
+    const drive = google.drive({ version: "v3", auth });
+
+    const resp = await drive.files.list({
+      q: `'${folderId}' in parents and mimeType='application/pdf' and trashed=false`,
+      fields: "files(id,name,webViewLink,modifiedTime)",
+      orderBy: "modifiedTime desc",
+      pageSize: 1000
+    });
+
+    const manuals =
+      resp.data.files?.map((f) => ({
+        id: f.id!,
+        title: f.name || "Untitled",
+        brand: undefined,        // optional; UI will show "—"
+        category: undefined,     // optional
+        tags: [],                // optional
+        url: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`
+      })) ?? [];
+
+    res.setHeader("Cache-Control", "no-store");
     res.status(200).json(manuals);
   } catch (err: any) {
-    res.status(500).json({ error: err?.message ?? "Failed to load manuals" });
+    res.status(500).json({ error: err?.message ?? "Failed to fetch manuals" });
   }
 }
