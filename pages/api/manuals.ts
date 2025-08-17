@@ -1,16 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 
-export default async function handler(
-  _req: NextApiRequest,
-  res: NextApiResponse
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const keyRaw = process.env.GOOGLE_SERVICE_KEY;
-    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID || "18cA7HjlJjvU5NN1-eEfJnvpMoxNyQboi";
-    if (!keyRaw) throw new Error("Missing GOOGLE_SERVICE_KEY env var");
-
-    const key = JSON.parse(keyRaw);
+    // Load service account key from env variable
+    const key = JSON.parse(process.env.GOOGLE_SERVICE_KEY as string);
 
     const auth = new google.auth.JWT(
       key.client_email,
@@ -21,26 +15,40 @@ export default async function handler(
 
     const drive = google.drive({ version: "v3", auth });
 
-    const resp = await drive.files.list({
-      q: `'${folderId}' in parents and mimeType='application/pdf' and trashed=false`,
-      fields: "files(id,name,webViewLink,modifiedTime)",
-      orderBy: "modifiedTime desc",
-      pageSize: 1000
+    // Use the folder ID from env var
+    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID as string;
+
+    // List JSON files in the folder
+    const response = await drive.files.list({
+      q: `'${folderId}' in parents and mimeType='application/json'`,
+      fields: "files(id, name)",
     });
 
-    const manuals =
-      resp.data.files?.map((f) => ({
-        id: f.id!,
-        title: f.name || "Untitled",
-        brand: undefined,        // optional; UI will show "—"
-        category: undefined,     // optional
-        tags: [],                // optional
-        url: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`
-      })) ?? [];
+    const files = response.data.files || [];
 
-    res.setHeader("Cache-Control", "no-store");
+    if (files.length === 0) {
+      return res.status(404).json({ error: "No JSON files found in folder" });
+    }
+
+    // For now: just fetch the first JSON file
+    const fileId = files[0].id as string;
+    const file = await drive.files.get(
+      { fileId, alt: "media" },
+      { responseType: "stream" }
+    );
+
+    let data = "";
+    await new Promise<void>((resolve, reject) => {
+      file.data.on("data", (chunk) => (data += chunk));
+      file.data.on("end", () => resolve());
+      file.data.on("error", (err) => reject(err));
+    });
+
+    const manuals = JSON.parse(data);
     res.status(200).json(manuals);
   } catch (err: any) {
-    res.status(500).json({ error: err?.message ?? "Failed to fetch manuals" });
+    res.status(500).json({ error: err.message });
+  }
+} });
   }
 }
