@@ -1,10 +1,23 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+type Manual = {
+  id: string;
+  title: string;
+  url: string;
+  path: string[];            // e.g. ["Small Engines","Kawasaki Small Engine"]
+  brand?: string;            // optional: derived from path
+  category?: string;         // optional: derived from path
+  tags?: string[];
+};
+
+export default async function handler(_req: NextApiRequest, res: NextApiResponse) {
   try {
-    // Load service account key from env variable
     const key = JSON.parse(process.env.GOOGLE_SERVICE_KEY as string);
+    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID as string;
+    if (!key?.client_email || !key?.private_key || !folderId) {
+      throw new Error("Missing GOOGLE_SERVICE_KEY or GOOGLE_DRIVE_FOLDER_ID");
+    }
 
     const auth = new google.auth.JWT(
       key.client_email,
@@ -12,43 +25,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       key.private_key,
       ["https://www.googleapis.com/auth/drive.readonly"]
     );
-
     const drive = google.drive({ version: "v3", auth });
 
-    // Use the folder ID from env var
-    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID as string;
+    // helper: list children of a folder (both files and folders)
+    const listChildren = async (parentId: string) => {
+      const out: any[] = [];
+      let pageToken: string | undefined;
+      do {
+        const resp = await drive.files.list({
+          q: `'${parentId}' in parents and trashed=false`,
+          fields: "nextPageToken, files(id,name,mimeType,webViewLink)",
+          pageSize: 1000,
+          pageToken,
+        });
+        out.push(...(resp.data.files ?? []));
+        pageToken = resp.data.nextPageToken ?? undefined;
+      } while (pageToken);
+      return out;
+    };
 
-    // List JSON files in the folder
-    const response = await drive.files.list({
-      q: `'${folderId}' in parents and mimeType='application/json'`,
-      fields: "files(id, name)",
-    });
+    // DFS recursion: walk folders and collect PDFs
+    const manuals: Manual[] = [];
+    const walk = async (id: string, path: string[]) => {
+      const children = await listChildren(id);
 
-    const files = response.data.files || [];
+      // folders first
+      const folders = children.filter(f => f.mimeType === "application/vnd.google-apps.folder");
+      for (const f of folders) {
+        await walk(f.id!, [...path, f.name!]);
+      }
 
-    if (files.length === 0) {
-      return res.status(404).json({ error: "No JSON files found in folder" });
-    }
+      // PDFs in this folder
+      const pdfs = children.filter(f => f.mimeType === "application/pdf");
+      for (const f of pdfs) {
+        manuals.push({
+          id: f.id!,
+          title: f.name || "Untitled",
+          url: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
+          path,                                   // the folder path from root to here
+          // simple optional derivations (tweak how you like):
+          category: path[0],                      // e.g. "Small Engines" or "Powersports"
+          brand: path[1],                         // e.g. "Kawasaki Small Engine" or "John Deere Mowers"
+          tags: [],
+        });
+      }
+    };
 
-    // For now: just fetch the first JSON file
-    const fileId = files[0].id as string;
-    const file = await drive.files.get(
-      { fileId, alt: "media" },
-      { responseType: "stream" }
-    );
+    await walk(folderId, []); // start at your root folder
 
-    let data = "";
-    await new Promise<void>((resolve, reject) => {
-      file.data.on("data", (chunk) => (data += chunk));
-      file.data.on("end", () => resolve());
-      file.data.on("error", (err) => reject(err));
-    });
-
-    const manuals = JSON.parse(data);
+    res.setHeader("Cache-Control", "no-store");
     res.status(200).json(manuals);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-} });
+    res.status(500).json({ error: err?.message || "Failed to read Drive" });
   }
 }
