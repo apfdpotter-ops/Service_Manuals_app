@@ -42,10 +42,10 @@ function getDebugParam(req: NextApiRequest): string | undefined {
 function toGFiles(files: drive_v3.Schema$File[] | undefined): GFile[] {
   if (!files || files.length === 0) return [];
   return files.map((f: drive_v3.Schema$File): GFile => ({
-    id: f.id,
-    name: f.name,
-    mimeType: f.mimeType,
-    webViewLink: f.webViewLink,
+    id: f.id ?? undefined,
+    name: f.name ?? undefined,
+    mimeType: f.mimeType ?? undefined,
+    webViewLink: f.webViewLink ?? undefined,
   }));
 }
 
