@@ -1,6 +1,7 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
+
+/** ---- Types ---- **/
 
 // Minimal Drive file type we care about
 type GFile = {
@@ -14,32 +15,55 @@ type Manual = {
   id: string;
   title: string;
   url: string;
-  path: string[];     // the folder path from root -> current subfolder
+  path: string[]; // folder path from root -> current subfolder
   brand?: string;
   category?: string;
   tags?: string[];
 };
 
+type ApiOk = Manual[];
+type ApiDebug = {
+  count: number;
+  sample: Manual[];
+  envPresent: {
+    GOOGLE_SERVICE_KEY: boolean;
+    GOOGLE_DRIVE_FOLDER_ID: boolean;
+  };
+};
+type ApiErr = { error: string };
+
+// Minimal shape of the service account key
+type GoogleServiceKey = {
+  client_email: string;
+  private_key: string;
+};
+
+/** ---- Handler ---- **/
+
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse
+  res: NextApiResponse<ApiOk | ApiDebug | ApiErr>
 ) {
   try {
     const keyRaw = process.env.GOOGLE_SERVICE_KEY;
     const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
 
     if (!keyRaw || !folderId) {
-      return res.status(500).json({
-        error: "Missing GOOGLE_SERVICE_KEY or GOOGLE_DRIVE_FOLDER_ID",
-      });
+      return res
+        .status(500)
+        .json({ error: "Missing GOOGLE_SERVICE_KEY or GOOGLE_DRIVE_FOLDER_ID" });
     }
 
-    const key = JSON.parse(keyRaw as string);
+    // Parse the JSON service key safely
+    const key = JSON.parse(keyRaw) as GoogleServiceKey;
+
+    // Handle escaped newlines in private_key, which is common on Vercel
+    const privateKey = (key.private_key || "").replace(/\\n/g, "\n");
 
     const auth = new google.auth.JWT(
       key.client_email,
       undefined,
-      key.private_key,
+      privateKey,
       ["https://www.googleapis.com/auth/drive.readonly"]
     );
 
@@ -87,8 +111,8 @@ export default async function handler(
           title: f.name ?? "Untitled",
           url: f.webViewLink ?? `https://drive.google.com/file/d/${f.id}/view`,
           path,
-          category: path[0],
-          brand: path[1],
+          category: path[0], // e.g., "Powersports" | "Small Engines"
+          brand: path[1],    // e.g., "Kawasaki", "John Deere", etc.
           tags: [],
         });
       }
@@ -96,8 +120,12 @@ export default async function handler(
 
     await walk(folderId, []);
 
-    // optional debug
-    if (req.query.debug === "1") {
+    // Optional debug view
+    const debug = Array.isArray(req.query.debug)
+      ? req.query.debug[0]
+      : req.query.debug;
+
+    if (debug === "1") {
       return res.status(200).json({
         count: manuals.length,
         sample: manuals.slice(0, 3),
@@ -108,12 +136,11 @@ export default async function handler(
       });
     }
 
+    // Normal response
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json(manuals);
   } catch (err: unknown) {
-    if (err instanceof Error) {
-      return res.status(500).json({ error: err.message });
-    }
-    return res.status(500).json({ error: "Unknown error" });
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return res.status(500).json({ error: message });
   }
 }
