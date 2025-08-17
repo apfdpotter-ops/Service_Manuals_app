@@ -69,12 +69,11 @@ export default async function handler(
     const key = JSON.parse(keyRaw) as GoogleServiceKey;
     const privateKey: string = (key.private_key || "").replace(/\\n/g, "\n");
 
-    const auth = new google.auth.JWT(
-      key.client_email,
-      undefined,
-      privateKey,
-      ["https://www.googleapis.com/auth/drive.readonly"]
-    );
+    const auth = new google.auth.JWT({
+      email: key.client_email,
+      key: privateKey,
+      scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+    });
 
     const drive: drive_v3.Drive = google.drive({ version: "v3", auth });
 
@@ -84,3 +83,75 @@ export default async function handler(
       let pageToken: string | undefined;
 
       do {
+        const resp = await drive.files.list({
+          q: `'${parentId}' in parents and trashed=false`,
+          fields: "nextPageToken, files(id,name,mimeType,webViewLink)",
+          pageSize: 1000,
+          pageToken,
+        });
+
+        const data: drive_v3.Schema$FileList = resp.data;
+        const files: GFile[] = toGFiles(data.files);
+        out.push(...files);
+        pageToken = data.nextPageToken ?? undefined;
+      } while (pageToken);
+
+      return out;
+    };
+
+    // DFS: recurse subfolders and collect PDFs
+    const manuals: Manual[] = [];
+
+    const walk = async (id: string, path: string[]): Promise<void> => {
+      const children: GFile[] = await listChildren(id);
+
+      // Recurse into subfolders
+      const folders: GFile[] = children.filter(
+        (f: GFile) => f.mimeType === "application/vnd.google-apps.folder"
+      );
+      for (const f of folders) {
+        if (f.id && f.name) {
+          await walk(f.id, [...path, f.name]);
+        }
+      }
+
+      // Collect PDFs at this level
+      const pdfs: GFile[] = children.filter(
+        (f: GFile) => f.mimeType === "application/pdf"
+      );
+      for (const f of pdfs) {
+        if (!f.id) continue;
+        manuals.push({
+          id: f.id,
+          title: f.name ?? "Untitled",
+          url: f.webViewLink ?? `https://drive.google.com/file/d/${f.id}/view`,
+          path,
+          category: path[0],
+          brand: path[1],
+          tags: [],
+        });
+      }
+    };
+
+    await walk(folderId, []);
+
+    // Optional debug
+    if (getDebugParam(req) === "1") {
+      res.status(200).json({
+        count: manuals.length,
+        sample: manuals.slice(0, 3),
+        envPresent: {
+          GOOGLE_SERVICE_KEY: Boolean(keyRaw),
+          GOOGLE_DRIVE_FOLDER_ID: Boolean(folderId),
+        },
+      });
+      return;
+    }
+
+    res.setHeader("Cache-Control", "no-store");
+    res.status(200).json(manuals);
+  } catch (err: unknown) {
+    const message: string = err instanceof Error ? err.message : "Unknown error";
+    res.status(500).json({ error: message });
+  }
+}
