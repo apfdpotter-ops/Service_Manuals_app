@@ -1,23 +1,39 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 
+// Minimal Drive file type we care about
+type GFile = {
+  id?: string;
+  name?: string;
+  mimeType?: string;
+  webViewLink?: string;
+};
+
 type Manual = {
   id: string;
   title: string;
   url: string;
-  path: string[];
+  path: string[];     // the folder path from root -> current subfolder
   brand?: string;
   category?: string;
   tags?: string[];
 };
 
-export default async function handler(_req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
   try {
-    const key = JSON.parse(process.env.GOOGLE_SERVICE_KEY as string);
-    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID as string;
-    if (!key?.client_email || !key?.private_key || !folderId) {
-      throw new Error("Missing GOOGLE_SERVICE_KEY or GOOGLE_DRIVE_FOLDER_ID");
+    const keyRaw = process.env.GOOGLE_SERVICE_KEY;
+    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
+
+    if (!keyRaw || !folderId) {
+      return res.status(500).json({
+        error: "Missing GOOGLE_SERVICE_KEY or GOOGLE_DRIVE_FOLDER_ID",
+      });
     }
+
+    const key = JSON.parse(keyRaw as string);
 
     const auth = new google.auth.JWT(
       key.client_email,
@@ -25,10 +41,12 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
       key.private_key,
       ["https://www.googleapis.com/auth/drive.readonly"]
     );
+
     const drive = google.drive({ version: "v3", auth });
 
-    const listChildren = async (parentId: string) => {
-      const out: any[] = [];
+    // List children (files & folders) of a folder
+    const listChildren = async (parentId: string): Promise<GFile[]> => {
+      const out: GFile[] = [];
       let pageToken: string | undefined;
       do {
         const resp = await drive.files.list({
@@ -43,21 +61,30 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
       return out;
     };
 
+    // DFS: recurse subfolders and collect PDFs
     const manuals: Manual[] = [];
-    const walk = async (id: string, path: string[]) => {
+
+    const walk = async (id: string, path: string[]): Promise<void> => {
       const children = await listChildren(id);
 
-      const folders = children.filter(f => f.mimeType === "application/vnd.google-apps.folder");
+      // Recurse into subfolders
+      const folders = children.filter(
+        (f) => f.mimeType === "application/vnd.google-apps.folder"
+      );
       for (const f of folders) {
-        await walk(f.id!, [...path, f.name!]);
+        if (f.id && f.name) {
+          await walk(f.id, [...path, f.name]);
+        }
       }
 
-      const pdfs = children.filter(f => f.mimeType === "application/pdf");
+      // Collect PDFs at this level
+      const pdfs = children.filter((f) => f.mimeType === "application/pdf");
       for (const f of pdfs) {
+        if (!f.id) continue;
         manuals.push({
-          id: f.id!,
-          title: f.name || "Untitled",
-          url: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
+          id: f.id,
+          title: f.name ?? "Untitled",
+          url: f.webViewLink ?? `https://drive.google.com/file/d/${f.id}/view`,
           path,
           category: path[0],
           brand: path[1],
@@ -68,12 +95,24 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
 
     await walk(folderId, []);
 
+    // optional debug
+    if (req.query.debug === "1") {
+      return res.status(200).json({
+        count: manuals.length,
+        sample: manuals.slice(0, 3),
+        envPresent: {
+          GOOGLE_SERVICE_KEY: Boolean(keyRaw),
+          GOOGLE_DRIVE_FOLDER_ID: Boolean(folderId),
+        },
+      });
+    }
+
     res.setHeader("Cache-Control", "no-store");
-    res.status(200).json(manuals);
+    return res.status(200).json(manuals);
   } catch (err: unknown) {
-  if (err instanceof Error) {
-    return res.status(500).json({ error: err.message });
+    if (err instanceof Error) {
+      return res.status(500).json({ error: err.message });
+    }
+    return res.status(500).json({ error: "Unknown error" });
   }
-  return res.status(500).json({ error: "Unknown error" });
-}
 }
