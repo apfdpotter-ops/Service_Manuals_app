@@ -70,7 +70,10 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
 
     res.setHeader("Cache-Control", "no-store");
     res.status(200).json(manuals);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || "Failed to read Drive" });
+  } catch (err: unknown) {
+  if (err instanceof Error) {
+    return res.status(500).json({ error: err.message });
   }
+  return res.status(500).json({ error: "Unknown error" });
+}
 }
