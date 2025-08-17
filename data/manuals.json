@@ -1,0 +1,18 @@
+[
+  {
+    "id": "demo-1",
+    "title": "John Deere X300 Owner’s Manual",
+    "brand": "John Deere",
+    "category": "Mower",
+    "tags": ["x300", "owner", "jd"],
+    "url": "https://example.com/jd-x300.pdf"
+  },
+  {
+    "id": "demo-2",
+    "title": "Kawasaki FR651V Service Manual",
+    "brand": "Kawasaki",
+    "category": "Small Engine",
+    "tags": ["fr651v", "service", "kawi"],
+    "url": "https://example.com/fr651v.pdf"
+  }
+]
